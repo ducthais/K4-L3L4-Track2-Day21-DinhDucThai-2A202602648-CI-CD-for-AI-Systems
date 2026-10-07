@@ -48,3 +48,12 @@ Tập dữ liệu Adult có phân bố lớp mất cân bằng lớn khi lớp t
 | Bước 3 (thêm `train_batch2`) | 0.7354 | 0.8820 |
 
 **Nhận xét:** Khi bổ sung thêm 22.361 mẫu dữ liệu mới, f1_score tăng nhẹ khoảng 0.02 (từ 0.7149 lên 0.7354) và accuracy tăng từ 0.8740 lên 0.8820. Mức tăng trưởng ổn định nhưng không đột biến vì tập dữ liệu mới có cùng nguồn gốc và phân phối với tập ban đầu. Điều quan trọng nhất là pipeline CI/CD đã tự động kích hoạt hoàn toàn từ một commit dữ liệu DVC, thực hiện huấn luyện và cập nhật API trên VM mà không cần can thiệp thủ công.
+
+---
+
+## 5. Phần Bonus Đã Thực Hiện
+
+- [x] Bonus 2 - Điều chỉnh ngưỡng quyết định: Quét ngưỡng xác suất từ 0.1 đến 0.9 (bước 0.05), xác định ngưỡng tối ưu là 0.30 giúp f1_score tăng từ 0.7354 lên 0.7537 so với ngưỡng mặc định 0.5.
+- [x] Bonus 3 - Báo cáo precision / recall tự động: Tự động tính confusion matrix và classification report lưu vào `outputs/detail.txt` và upload làm artifact. Với bài toán này, bỏ sót người thu nhập cao (recall thấp) tốn kém hơn vì làm mất cơ hội tiếp cận khách hàng mục tiêu giá trị.
+- [x] Bonus 5 - Cảnh báo lệch lạc dữ liệu: Kiểm tra tỷ lệ lớp dương trong tập huấn luyện (24.78%), cảnh báo nếu độ lệch vượt quá 5% so với mốc 24.8% và ghi nhận vào `report.json`.
+

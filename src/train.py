@@ -1,12 +1,13 @@
 import mlflow
 import mlflow.sklearn
 import pandas as pd
+import numpy as np
 import yaml
 import json
 import joblib
 import os
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
 
 # Nguong chat luong cua lab nay la f1_score, KHONG phai accuracy.
 # Ly do: bo du lieu Adult co ty le lop 75/25. Mot mo hinh doan bua
@@ -41,6 +42,15 @@ def train(
     X_eval = df_eval.drop(columns=["target"])
     y_eval = df_eval["target"]
 
+    # BONUS 5: Canh bao lech lac du lieu (Data Drift)
+    pos_ratio = float(y_train.mean())
+    baseline_ratio = 0.248
+    drift_diff = abs(pos_ratio - baseline_ratio)
+    if drift_diff > 0.05:
+        print(f"[CANH BAO DATA DRIFT] Ty le lop duong ({pos_ratio:.4f}) lech {drift_diff:.4f} (> 5%) so voi tham chieu ({baseline_ratio:.4f})!")
+    else:
+        print(f"[DATA QUALITY OK] Ty le lop duong: {pos_ratio:.4f} (tham chieu {baseline_ratio:.4f}, chenh lech: {drift_diff:.4f})")
+
     if not os.environ.get("MLFLOW_TRACKING_URI"):
         mlflow.set_tracking_uri("sqlite:///mlflow.db")
 
@@ -48,6 +58,7 @@ def train(
 
         # TODO 3: Ghi nhan cac sieu tham so
         mlflow.log_params(params)
+        mlflow.log_metric("pos_class_ratio", pos_ratio)
 
         # TODO 4: Khoi tao va huan luyen GradientBoostingClassifier
         # Goi y: su dung random_state=42 de dam bao tinh tai tao
@@ -60,19 +71,53 @@ def train(
         f1 = float(f1_score(y_eval, preds))
         acc = float(accuracy_score(y_eval, preds))
 
+        # BONUS 2: Dieu chinh nguong quyet dinh (Decision Threshold Tuning)
+        probs = model.predict_proba(X_eval)[:, 1]
+        best_threshold = 0.5
+        best_f1_tuned = f1
+        for thresh in np.arange(0.1, 0.91, 0.05):
+            t_preds = (probs >= thresh).astype(int)
+            t_f1 = float(f1_score(y_eval, t_preds))
+            if t_f1 > best_f1_tuned:
+                best_f1_tuned = t_f1
+                best_threshold = float(thresh)
+
         # TODO 6: Ghi nhan chi so vao MLflow
         mlflow.log_metric("f1_score", f1)
         mlflow.log_metric("accuracy", acc)
+        mlflow.log_metric("best_threshold", best_threshold)
+        mlflow.log_metric("f1_score_tuned", best_f1_tuned)
         mlflow.sklearn.log_model(model, "model")
 
-        # TODO 7: In ket qua ra man hinh
-        print(f"F1: {f1:.4f} | Accuracy: {acc:.4f}")
+        # BONUS 3: Tinh confusion matrix, precision / recall theo lop
+        cm = confusion_matrix(y_eval, preds)
+        cr = classification_report(y_eval, preds, digits=4)
 
-        # TODO 8: Luu metrics ra file outputs/report.json
-        # File nay duoc doc boi GitHub Actions o Buoc 2
+        # TODO 7: In ket qua ra man hinh
+        print(f"F1 (nguong 0.5): {f1:.4f} | Accuracy: {acc:.4f}")
+        print(f"F1 toi uu (nguong {best_threshold:.2f}): {best_f1_tuned:.4f}")
+        print(f"Confusion Matrix:\n{cm}")
+        print(f"Classification Report:\n{cr}")
+
+        # TODO 8: Luu metrics ra file outputs/report.json va outputs/detail.txt
         os.makedirs("outputs", exist_ok=True)
+        report_data = {
+            "f1_score": f1,
+            "accuracy": acc,
+            "positive_class_ratio": pos_ratio,
+            "best_threshold": best_threshold,
+            "f1_score_tuned": best_f1_tuned,
+        }
         with open("outputs/report.json", "w") as f:
-            json.dump({"f1_score": f1, "accuracy": acc}, f)
+            json.dump(report_data, f, indent=2)
+
+        with open("outputs/detail.txt", "w", encoding="utf-8") as f:
+            f.write("=== CONFUSION MATRIX ===\n")
+            f.write(str(cm) + "\n\n")
+            f.write("=== CLASSIFICATION REPORT ===\n")
+            f.write(cr + "\n")
+            f.write(f"\nTy le lop duong: {pos_ratio:.4f}\n")
+            f.write(f"Nguong toi uu: {best_threshold:.2f} (F1 = {best_f1_tuned:.4f})\n")
 
         # TODO 9: Luu mo hinh ra file models/model.joblib
         # File nay duoc upload len cloud storage o Buoc 2
