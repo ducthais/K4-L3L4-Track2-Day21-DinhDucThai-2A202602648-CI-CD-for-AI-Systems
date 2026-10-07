@@ -6,7 +6,7 @@ import os
 
 app = FastAPI()
 
-ARTIFACT_BUCKET = os.environ["ARTIFACT_BUCKET"]
+ARTIFACT_BUCKET = os.environ.get("ARTIFACT_BUCKET", "")
 MODEL_KEY = "artifacts/current/model.joblib"
 MODEL_PATH = os.path.expanduser("~/models/model.joblib")
 
@@ -16,26 +16,36 @@ def download_model():
     Tai file model.joblib tu cloud storage ve may khi server khoi dong.
 
     Ham nay duoc goi mot lan khi module duoc import. Su dung
-    GOOGLE_APPLICATION_CREDENTIALS de xac thuc (duoc dat trong systemd service).
+    GOOGLE_APPLICATION_CREDENTIALS (GCP) hoac AWS credentials de xac thuc.
     """
-    # TODO 1: Tao storage.Client()
-    # client = storage.Client()
+    os.makedirs(os.path.dirname(os.path.abspath(MODEL_PATH)), exist_ok=True)
+    if not ARTIFACT_BUCKET:
+        print("ARTIFACT_BUCKET chua duoc cau hinh.")
+        return
 
-    # TODO 2: Lay bucket va blob tuong ung
-    # bucket = client.bucket(ARTIFACT_BUCKET)
-    # blob   = bucket.blob(MODEL_KEY)
+    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+        try:
+            from google.cloud import storage
+            client = storage.Client()
+            bucket = client.bucket(ARTIFACT_BUCKET)
+            blob = bucket.blob(MODEL_KEY)
+            blob.download_to_filename(MODEL_PATH)
+            print("Model da duoc tai xuong tu Google Cloud Storage.")
+            return
+        except Exception as e:
+            print(f"Loi tai tu GCS: {e}")
 
-    # TODO 3: Tai file model xuong may
-    # blob.download_to_filename(MODEL_PATH)
-
-    # TODO 4: In thong bao thanh cong
-    # print("Model da duoc tai xuong tu cloud storage.")
-
-    pass  # xoa dong nay sau khi hoan thanh tat ca TODO ben tren
+    try:
+        import boto3
+        s3 = boto3.client("s3")
+        s3.download_file(ARTIFACT_BUCKET, MODEL_KEY, MODEL_PATH)
+        print("Model da duoc tai xuong tu AWS S3.")
+    except Exception as e:
+        print(f"Loi tai tu S3: {e}")
 
 
 download_model()
-model = joblib.load(MODEL_PATH)
+model = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
 
 
 class ScoreRequest(BaseModel):
@@ -50,8 +60,7 @@ def healthz():
 
     Tra ve: {"status": "ok"}
     """
-    # TODO 5: Tra ve dict {"status": "ok"}
-    pass  # xoa dong nay sau khi hoan thanh
+    return {"status": "ok"}
 
 
 @app.post("/score")
@@ -66,17 +75,22 @@ def score(req: ScoreRequest):
         age, workclass, education_num, marital_status, occupation,
         relationship, sex, capital_gain, capital_loss, hours_per_week
     """
-    # TODO 6: Kiem tra so luong dac trung.
-    # Neu len(req.features) != 10, raise HTTPException(status_code=400, ...)
+    if len(req.features) != 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Expected 10 features (adult income)",
+        )
 
-    # TODO 7: Goi model.predict([req.features]) de lay ket qua du doan.
-    # pred = model.predict(...)
+    global model
+    if model is None:
+        if os.path.exists(MODEL_PATH):
+            model = joblib.load(MODEL_PATH)
+        else:
+            raise HTTPException(status_code=500, detail="Model chua duoc load.")
 
-    # TODO 8: Tra ve dict chua "prediction" (int) va "label" (string).
-    # Nhan tuong ung: 0 -> "thu_nhap_thap", 1 -> "thu_nhap_cao"
-    # return {"prediction": ..., "label": ...}
-
-    pass  # xoa dong nay sau khi hoan thanh tat ca TODO ben tren
+    pred = int(model.predict([req.features])[0])
+    label = "thu_nhap_cao" if pred == 1 else "thu_nhap_thap"
+    return {"prediction": pred, "label": label}
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ jobs:
 
       - name: Run unit tests
         # TODO 1: Viet lenh de chay pytest tren thu muc tests/ voi co -v
-        run: # <dien lenh o day>
+        run: pytest tests/ -v
 
 
   # ---------------------------------------------------------------------------
@@ -58,19 +58,39 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Authenticate to Cloud Storage
-        # TODO 2: Ghi noi dung credentials ra file tam va set bien moi truong xac thuc.
-        # GCP:   echo '${{ secrets.STORAGE_CREDENTIALS }}' > /tmp/sa-key.json
-        #        echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa-key.json" >> $GITHUB_ENV
-        # AWS:   echo "AWS_ACCESS_KEY_ID=..." >> $GITHUB_ENV  (lay tu secrets)
-        #        echo "AWS_SECRET_ACCESS_KEY=..." >> $GITHUB_ENV
-        # Azure: echo "AZURE_STORAGE_CONNECTION_STRING=..." >> $GITHUB_ENV
+        env:
+          STORAGE_CREDENTIALS: ${{ secrets.STORAGE_CREDENTIALS }}
         run: |
-          # <dien code o day>
+          python - <<'PYEOF'
+          import os, json
+          raw = os.environ.get("STORAGE_CREDENTIALS", "").strip()
+          github_env = os.environ.get("GITHUB_ENV")
+          if raw.startswith("{"):
+              try:
+                  data = json.loads(raw)
+                  with open(github_env, "a") as f:
+                      if "aws_access_key_id" in data or "AWS_ACCESS_KEY_ID" in data:
+                          key_id = data.get("aws_access_key_id") or data.get("AWS_ACCESS_KEY_ID")
+                          secret_key = data.get("aws_secret_access_key") or data.get("AWS_SECRET_ACCESS_KEY")
+                          region = data.get("region") or data.get("aws_region") or "us-east-1"
+                          f.write(f"AWS_ACCESS_KEY_ID={key_id}\n")
+                          f.write(f"AWS_SECRET_ACCESS_KEY={secret_key}\n")
+                          f.write(f"AWS_DEFAULT_REGION={region}\n")
+                      else:
+                          with open("/tmp/sa-key.json", "w") as sa_file:
+                              sa_file.write(raw)
+                          f.write("GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa-key.json\n")
+              except Exception as e:
+                  print("Error parsing credentials:", e)
+          elif raw:
+              with open(github_env, "a") as f:
+                  f.write(f"AZURE_STORAGE_CONNECTION_STRING={raw}\n")
+          PYEOF
 
       - name: Pull data with DVC
         # TODO 3: Pull cac file du lieu can thiet tu cloud storage bang lenh dvc pull.
         #         Chi pull train_batch1.csv va holdout.csv (khong can train_batch2.csv).
-        run: # <dien lenh o day>
+        run: dvc pull data/train_batch1.csv.dvc data/holdout.csv.dvc
 
       - name: Train model
         run: python src/train.py
@@ -79,20 +99,34 @@ jobs:
         id: read_report
         # TODO 4: Doc gia tri "f1_score" tu outputs/report.json bang Python inline.
         #         Set ket qua thanh output "f1" de job quality-gate co the doc.
-        #
-        # Goi y:
-        #   F1=$(python -c "import json; d=json.load(open('outputs/report.json')); print(d['f1_score'])")
-        #   echo "f1=$F1" >> $GITHUB_OUTPUT
         run: |
-          # <dien code o day>
+          F1=$(python -c "import json; d=json.load(open('outputs/report.json')); print(d['f1_score'])")
+          echo "f1=$F1" >> $GITHUB_OUTPUT
 
       - name: Upload model to Cloud Storage
         # TODO 5: Su dung cloud SDK de upload models/model.joblib len
         #         <bucket>/artifacts/current/model.joblib.
         #         Ten bucket lay tu secret ARTIFACT_BUCKET.
+        env:
+          ARTIFACT_BUCKET: ${{ secrets.ARTIFACT_BUCKET }}
         run: |
           python - <<'PYEOF'
-          # <dien code Python o day>
+          import os
+          bucket_name = os.environ["ARTIFACT_BUCKET"]
+          model_file = "models/model.joblib"
+          key = "artifacts/current/model.joblib"
+          if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+              from google.cloud import storage
+              client = storage.Client()
+              bucket = client.bucket(bucket_name)
+              blob = bucket.blob(key)
+              blob.upload_from_filename(model_file)
+              print("Uploaded model.joblib to GCS successfully")
+          else:
+              import boto3
+              s3 = boto3.client("s3")
+              s3.upload_file(model_file, bucket_name, key)
+              print("Uploaded model.joblib to S3 successfully")
           PYEOF
 
       - name: Save report as artifact
@@ -122,15 +156,12 @@ jobs:
         # TODO 6: Doc f1 tu output cua job train.
         #         Neu f1 < 0.65, ket thuc voi loi ro rang.
         #         Neu dat nguong, in thong bao va tiep tuc.
-        #
-        # Goi y:
-        #   f1 = float("${{ needs.train.outputs.f1 }}")
-        #   if f1 < 0.65:
-        #       raise SystemExit(f"FAILED: f1_score {f1:.4f} < 0.65. Huy trien khai.")
-        #   print("PASSED: dang trien khai model.")
         run: |
           python - <<'PYEOF'
-          # <dien code Python o day>
+          f1 = float("${{ needs.train.outputs.f1 }}")
+          if f1 < 0.65:
+              raise SystemExit(f"FAILED: f1_score {f1:.4f} < 0.65. Huy trien khai.")
+          print(f"PASSED: f1_score {f1:.4f} >= 0.65. Dang trien khai model.")
           PYEOF
 
 
@@ -155,9 +186,6 @@ jobs:
             # TODO 7: Restart service income-api tren VM.
             # TODO 8: Cho server san sang roi goi curl /healthz de xac nhan.
             #         Neu health check that bai sau nhieu lan thu, thoat voi exit 1.
-            #
-            # Goi y:
-            #   sudo systemctl restart income-api
-            #   sleep 5
-            #   curl -sf http://localhost:8080/healthz && echo "Health check passed." || exit 1
-            # <dien lenh bash o day>
+            sudo systemctl restart income-api
+            sleep 5
+            curl -sf http://localhost:8080/healthz && echo "Health check passed." || exit 1
